@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unicodedata
+from urllib.error import HTTPError, URLError
 
 
 def normalizar(texto):
@@ -24,6 +25,11 @@ class Jarvis:
 
     def ejecutar(self, texto):
         orden = normalizar(texto)
+        if self.conversacion:
+            self.conversacion.contexto = {
+                'carpeta_notas': str(self.carpeta),
+                'ultima_nota': str(self.ultima_nota) if self.nota_disponible(self.ultima_nota) else None,
+            }
         if orden.startswith('jarvis '):
             texto = texto[7:]
             orden = normalizar(texto)
@@ -35,7 +41,8 @@ class Jarvis:
             elif orden == 'confirmar':
                 plan, self.pendiente = self.pendiente, None
                 resultado = self.ejecutar_plan(plan)
-                self.conversacion.recordar(self.peticion_pendiente, resultado)
+                if self.conversacion:
+                    self.conversacion.recordar(self.peticion_pendiente, resultado)
                 return resultado, False
             else:
                 return 'Hay un plan pendiente. Di confirmar o cancelar antes de continuar.', False
@@ -47,6 +54,20 @@ class Jarvis:
             return 'He olvidado esta conversación.', False
         if orden in ('salir', 'terminar', 'adios'):
             return 'Hasta luego.', True
+        if orden in ('donde la guardaste', 'donde esta la nota', 'donde guardaste la nota',
+                     'donde estan mis notas', 'donde se guardan las notas'):
+            if self.nota_disponible(self.ultima_nota):
+                respuesta = f'La última nota está en: {self.ultima_nota}'
+            else:
+                respuesta = f'La carpeta de notas es: {self.carpeta}. No tengo una nota reciente en esta sesión.'
+            if self.conversacion:
+                self.conversacion.recordar(texto, respuesta)
+            return respuesta, False
+        if orden in ('abrela', 'abre la', 'abre la nota', 'abre esa nota', 'abre la ultima nota',
+                     'puedes abrir la nota en el bloc de notas'):
+            if not self.nota_disponible(self.ultima_nota):
+                return 'No tengo una nota reciente disponible en esta sesión. ¿Qué archivo necesitas?', False
+            return self.ofrecer_plan({'respuesta': '', 'acciones': [{'tipo': 'abrir_ultima_nota'}]}, texto), False
         if orden in ('ayuda', 'que puedes hacer'):
             return ('Di: abre calculadora, abre bloc de notas, busca archivo informe, '
                     'crea nota comprar leche, o salir. Solo busco dentro de la carpeta autorizada.'), False
@@ -88,41 +109,61 @@ class Jarvis:
                     if ruta.read_text(encoding='utf-8') != contenido + '\n':
                         raise OSError('No se pudo verificar la nota guardada')
                     self.ultima_nota = ruta
-                    return f'Nota guardada y verificada: {ruta.name}.', False
+                    return f'Nota guardada y verificada: {ruta}.', False
                 except FileExistsError:
                     continue
             return 'No hay un nombre de nota disponible.', False
         if self.conversacion:
             if self.acciones:
-                from acciones import validar_plan, describir
+                from acciones import validar_plan
                 try:
                     plan = validar_plan(self.conversacion.planificar(texto))
-                except Exception:
-                    return ('No pude obtener un plan válido de la IA local. No ejecuté acciones. '
-                            'Comprueba Ollama o reformula la petición.'), False
+                except HTTPError as error:
+                    if error.code == 404:
+                        return f'Falta el modelo. Ejecuta: ollama pull {self.conversacion.modelo}', False
+                    return f'Ollama devolvió el error {error.code}. No ejecuté acciones.', False
+                except (URLError, TimeoutError, OSError):
+                    return 'No pude comunicarme con Ollama. Comprueba que esté abierto. No ejecuté acciones.', False
+                except (ValueError, KeyError, TypeError):
+                    respuesta = self.conversacion.responder(texto)
+                    return 'No ejecuté acciones; continúo solo la conversación. ' + respuesta, False
                 if not plan['acciones']:
                     return plan['respuesta'] or '¿Qué necesitas hacer?', False
-                self.pendiente = plan
-                self.peticion_pendiente = texto
-                pasos = '; '.join(f'{n}. {describir(a)}' for n, a in enumerate(plan['acciones'], 1))
-                return f'Propongo: {pasos}. Di confirmar para ejecutar o cancelar.', False
+                if any(a['tipo'] == 'abrir_ultima_nota' for a in plan['acciones']) and not self.nota_disponible(self.ultima_nota):
+                    return 'No tengo una nota reciente disponible en esta sesión. ¿Qué archivo necesitas?', False
+                return self.ofrecer_plan(plan, texto), False
             return self.conversacion.responder(texto), False
         return 'No reconozco ese comando. Di ayuda para conocer las opciones.', False
 
+
+    def nota_disponible(self, ruta):
+        try:
+            return (ruta is not None and not ruta.is_symlink() and
+                    ruta.resolve().parent == self.carpeta and ruta.is_file())
+        except OSError:
+            return False
+
+    def ofrecer_plan(self, plan, texto):
+        from acciones import validar_plan, describir
+        validar_plan(plan)
+        self.pendiente = plan
+        self.peticion_pendiente = texto
+        pasos = '; '.join(f'{n}. {describir(a)}' for n, a in enumerate(plan['acciones'], 1))
+        return f'Propongo: {pasos}. Di confirmar para ejecutar o cancelar.'
 
     def ejecutar_plan(self, plan):
         from acciones import validar_plan
         validar_plan(plan)
         resultados = []
-        self.ultima_nota = None
+        nota_del_plan = None
         for numero, accion in enumerate(plan['acciones'], 1):
             try:
                 tipo = accion['tipo']
-                if tipo == 'abrir_nota_creada':
+                if tipo in ('abrir_nota_creada', 'abrir_ultima_nota'):
                     if sys.platform != 'win32':
                         raise OSError('Abrir notas requiere Windows')
-                    ruta = self.ultima_nota
-                    if ruta is None or ruta.is_symlink() or ruta.resolve().parent != self.carpeta or not ruta.is_file():
+                    ruta = nota_del_plan if tipo == 'abrir_nota_creada' else self.ultima_nota
+                    if not self.nota_disponible(ruta):
                         raise OSError('La nota creada ya no está disponible')
                     subprocess.Popen(['notepad.exe', str(ruta)], shell=False)
                     resultado = 'Solicitud de apertura de la nota enviada a Windows.'
@@ -137,6 +178,8 @@ class Jarvis:
                     resultado, _ = self.ejecutar(comando)
                     if tipo == 'crear_nota' and self.ultima_nota is None:
                         raise OSError('No se pudo crear la nota')
+                    if tipo == 'crear_nota':
+                        nota_del_plan = self.ultima_nota
                 resultados.append(f'Paso {numero}: {resultado}')
             except Exception as error:
                 resultados.append(f'Paso {numero} falló: {error}. Detuve los pasos restantes. '

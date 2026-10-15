@@ -16,8 +16,8 @@ def validar_plan(plan):
             raise ValueError('Acción inválida')
         tipo = accion.get('tipo')
         campo = {'abrir_aplicacion': 'aplicacion', 'crear_nota': 'contenido',
-                 'buscar_archivos': 'consulta', 'abrir_nota_creada': None}.get(tipo)
-        if tipo not in ('abrir_aplicacion', 'crear_nota', 'buscar_archivos', 'abrir_nota_creada'):
+                 'buscar_archivos': 'consulta', 'abrir_nota_creada': None, 'abrir_ultima_nota': None}.get(tipo)
+        if tipo not in ('abrir_aplicacion', 'crear_nota', 'buscar_archivos', 'abrir_nota_creada', 'abrir_ultima_nota'):
             raise ValueError('Herramienta no permitida')
         if set(accion) != ({'tipo', campo} if campo else {'tipo'}):
             raise ValueError('Argumentos no permitidos')
@@ -42,4 +42,26 @@ def describir(accion):
         return 'Crear una nota con este contenido: ' + accion['contenido']
     if tipo == 'buscar_archivos':
         return 'Buscar archivos cuyo nombre contenga: ' + accion['consulta']
+    if tipo == 'abrir_ultima_nota':
+        return 'Abrir la última nota de esta sesión en el bloc de notas'
     return 'Abrir la nota creada en este plan'
+
+
+# Ollama restringe la generación a esta estructura; la validación Python sigue
+# siendo la autoridad antes de ejecutar herramientas.
+def esquema_plan():
+    variantes = []
+    for tipo, campo in [('abrir_aplicacion', 'aplicacion'), ('crear_nota', 'contenido'),
+                        ('buscar_archivos', 'consulta'), ('abrir_nota_creada', None),
+                        ('abrir_ultima_nota', None)]:
+        propiedades = {'tipo': {'type': 'string', 'enum': [tipo]}}
+        if campo:
+            propiedades[campo] = {'type': 'string', 'minLength': 1, 'maxLength': 4000}
+        if tipo == 'abrir_aplicacion':
+            propiedades[campo] = {'type': 'string', 'enum': sorted(APLICACIONES)}
+        variantes.append({'type': 'object', 'properties': propiedades,
+                         'required': list(propiedades), 'additionalProperties': False})
+    return {'type': 'object', 'properties': {
+        'respuesta': {'type': 'string', 'maxLength': 2000},
+        'acciones': {'type': 'array', 'maxItems': 4, 'items': {'oneOf': variantes}},
+    }, 'required': ['respuesta', 'acciones'], 'additionalProperties': False}

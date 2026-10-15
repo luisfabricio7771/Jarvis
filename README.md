@@ -128,6 +128,23 @@ Para probar con teclado usa `--texto --ia --acciones`. No se añaden dependencia
 
 Ejemplos: «Necesito hacer unas cuentas», «Crea una nota que diga comprar leche y ábrela», «Busca archivos con informe en el nombre». Jarvis muestra y lee un plan de hasta cuatro acciones. Di **confirmar** o **cancelar** en el siguiente turno (pulsa Enter antes de hablar). El plan no se ejecuta hasta confirmarlo. Si una propuesta es ambigua, cancélala y reformula. Si falla un paso se detienen los siguientes; los cambios anteriores no se revierten automáticamente.
 
-La IA solo puede proponer calculadora, bloc de notas, explorador, búsquedas por nombre, creación de notas y apertura de la nota creada en ese mismo plan. El programa valida todas las acciones antes de ejecutar la primera; no acepta rutas, programas ni comandos arbitrarios del modelo. Las notas se guardan en la carpeta autorizada, por defecto `%USERPROFILE%\Jarvis`, y se comprueba su contenido. Abrir un programa informa que Windows recibió la solicitud; no demuestra que la ventana sea visible.
+La IA solo puede proponer calculadora, bloc de notas, explorador, búsquedas por nombre, creación de notas y apertura de una nota creada en el plan o de la última nota de la sesión. El programa valida todas las acciones antes de ejecutar la primera; no acepta rutas, programas ni comandos arbitrarios del modelo. Las notas se guardan en la carpeta autorizada, por defecto `%USERPROFILE%\Jarvis`, y se comprueba su contenido. Abrir un programa informa que Windows recibió la solicitud; no demuestra que la ventana sea visible.
 
 Los comandos exactos anteriores, como `crea nota hola` o `abre calculadora`, siguen ejecutándose directamente como antes. Para obtener un plan usa una petición natural. La memoria es temporal, limitada a seis intercambios, y los resultados confirmados se guardan como contexto. No hay todavía memoria persistente ni envío de mensajes, borrado o compras. Las pruebas del planificador usan respuestas simuladas; la precisión de las peticiones naturales debe comprobarse con el modelo real en Windows.
+
+
+## Contexto de notas y recuperación de conversación
+
+La última nota se conserva entre turnos mientras Jarvis está abierto. «Ábrela», «abre la nota» y «puedes abrir la nota en el bloc de notas» proponen abrir esa nota y requieren confirmación. «Dónde la guardaste» devuelve su ruta completa. No se adivinan rutas externas y se verifica que el archivo siga existiendo dentro de la carpeta autorizada al confirmar. Al reiniciar no se recupera automáticamente la nota de la sesión anterior.
+
+Ollama recibe el historial y datos reales de la carpeta y la última nota. La salida usa un esquema JSON de herramientas, además de validación independiente en Python. Una respuesta mal formada se intenta reparar una vez. Si sigue fallando, Jarvis continúa en modo de conversación y avisa que no ejecutó acciones. Los problemas de conexión y modelo ausente se muestran por separado. Ayudar a organizar pendientes no requiere crear archivos: la IA tiene instrucciones de preguntar por tareas y fechas, usando lo que ya le has dicho.
+
+Para comprobar primero la comprensión sin errores del micrófono:
+
+```powershell
+.\.venv\Scripts\python.exe jarvis.py --texto --ia --acciones
+```
+
+Prueba: «Ayúdame a organizar mi día; pregúntame mis pendientes», responde con tus tareas y horarios; después «Crea una nota que diga comprar leche», «confirmar», «dónde la guardaste», «ábrela», «confirmar». Para probar la voz omite `--texto` y añade `--piper modelos\piper\es_ES-davefx-medium.onnx`.
+
+Las pruebas cubren los flujos anteriores con respuestas simuladas del modelo y apertura simulada de aplicaciones. No demuestran la calidad de razonamiento del modelo real ni la precisión de Vosk: si algo falla, compara primero el texto mostrado en `Tú:` con lo que dijiste. El modelo pequeño de 3B sigue teniendo limitaciones de comprensión; estas mejoras corrigen contexto y manejo de herramientas, no aumentan su tamaño.
