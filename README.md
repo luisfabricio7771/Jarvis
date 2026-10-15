@@ -111,3 +111,7 @@ Para volver a las voces de Windows, omite `--piper`. Puedes elegir entre las ins
 ```
 
 Las pruebas automatizadas comprueban el manejo de respuestas y fallos de Ollama mediante simulación; no verifican la calidad real del modelo o de la voz. La reproducción de audio, el micrófono, el rendimiento GPU y la instalación de Piper deben validarse en Windows.
+
+### Si la conversación mezcla idiomas
+
+Actualiza `inteligencia.py` desde este repositorio y reinicia Jarvis para borrar el historial anterior. La configuración solicita respuestas breves en español y usa temperatura 0.3. Es una preferencia del modelo, no una garantía de idioma: si persiste, conserva el texto exacto de la respuesta para diagnosticarlo. Cambiar la voz de Piper no cambia las palabras generadas por Ollama.
