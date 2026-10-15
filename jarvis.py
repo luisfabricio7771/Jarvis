@@ -13,7 +13,8 @@ def normalizar(texto):
 
 
 class Jarvis:
-    def __init__(self, carpeta):
+    def __init__(self, carpeta, conversacion=None):
+        self.conversacion = conversacion
         self.carpeta = Path(carpeta).expanduser().resolve()
         self.carpeta.mkdir(parents=True, exist_ok=True)
 
@@ -22,6 +23,10 @@ class Jarvis:
         if orden.startswith('jarvis '):
             texto = texto[7:]
             orden = normalizar(texto)
+        if orden == 'olvida la conversacion':
+            if self.conversacion:
+                self.conversacion.historial.clear()
+            return 'He olvidado esta conversación.', False
         if orden in ('salir', 'terminar', 'adios'):
             return 'Hasta luego.', True
         if orden in ('ayuda', 'que puedes hacer'):
@@ -66,6 +71,8 @@ class Jarvis:
                 except FileExistsError:
                     continue
             return 'No hay un nombre de nota disponible.', False
+        if self.conversacion:
+            return self.conversacion.responder(texto), False
         return 'No reconozco ese comando. Di ayuda para conocer las opciones.', False
 
 
@@ -74,20 +81,33 @@ def main():
     parser.add_argument('--texto', action='store_true', help='Usar teclado sin dependencias de voz')
     parser.add_argument('--carpeta', default=str(Path.home() / 'Jarvis'), help='Carpeta autorizada para notas y búsquedas')
     parser.add_argument('--modelo', default='modelos/vosk-es', help='Directorio del modelo español Vosk descomprimido')
+    parser.add_argument('--ia', action='store_true', help='Conversar con Ollama en esta PC')
+    parser.add_argument('--modelo-ia', default='qwen3:4b', help='Modelo instalado en Ollama')
+    parser.add_argument('--piper', help='Ruta al modelo de voz Piper .onnx (opcional)')
+    parser.add_argument('--voz', type=int, help='Número de voz Windows')
+    parser.add_argument('--listar-voces', action='store_true', help='Mostrar voces Windows y salir')
+    parser.add_argument('--velocidad', type=int, default=165, help='Velocidad de la voz Windows')
     args = parser.parse_args()
-    asistente = Jarvis(args.carpeta)
+    if args.listar_voces:
+        import pyttsx3
+        motor = pyttsx3.init()
+        for numero, voz in enumerate(motor.getProperty('voices')):
+            print(f'{numero}: {voz.name}')
+        motor.stop()
+        return
+    conversacion = None
+    if args.ia:
+        from inteligencia import Conversacion
+        conversacion = Conversacion(args.modelo_ia)
+    asistente = Jarvis(args.carpeta, conversacion)
     motor = None
     if not args.texto:
         try:
-            import pyttsx3
+            from voz import Voz
             import sounddevice as sd
             from vosk import Model, KaldiRecognizer
             import queue
-            motor = pyttsx3.init()
-            for voz in motor.getProperty('voices'):
-                if 'spanish' in voz.name.lower() or 'español' in voz.name.lower():
-                    motor.setProperty('voice', voz.id)
-                    break
+            motor = Voz(args.piper, args.voz, args.velocidad)
             modelo = Model(args.modelo)
         except Exception as error:
             parser.exit(1, f'No se pudo iniciar la voz: {error}\nConsulta README.md o utiliza --texto.\n')
@@ -95,8 +115,10 @@ def main():
     def responder(mensaje):
         print('Jarvis:', mensaje)
         if motor:
-            motor.say(mensaje)
-            motor.runAndWait()
+            try:
+                motor.decir(mensaje)
+            except Exception as error:
+                print(f'No pude reproducir la voz: {error}. La respuesta aparece arriba.')
 
     responder('Jarvis listo. Di ayuda para empezar.')
     while True:
