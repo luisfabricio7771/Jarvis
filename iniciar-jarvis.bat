@@ -5,5 +5,5 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" jarvis.py --ia --piper "modelos\piper\es_MX-ald-medium.onnx"
+".venv\Scripts\python.exe" jarvis.py --ia --acciones --modelo-ia qwen2.5:3b --piper "modelos\piper\es_ES-davefx-medium.onnx"
 pause

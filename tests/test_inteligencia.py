@@ -10,7 +10,7 @@ from jarvis import Jarvis
 
 class ConversacionTest(unittest.TestCase):
     def test_sesion_y_peticion_local(self):
-        c = Conversacion()
+        c = Conversacion('qwen3:4b')
         with patch.object(c.http, 'open', side_effect=lambda *a, **k: io.BytesIO(
                 json.dumps({'message': {'content': 'Hola, ¿cómo estás?'}}).encode())) as abrir:
             for _ in range(8):
@@ -40,7 +40,7 @@ class ConversacionTest(unittest.TestCase):
         with patch.object(c.http, 'open', side_effect=URLError('offline')):
             self.assertIn('Abre Ollama', c.responder('hola'))
         with patch.object(c.http, 'open', side_effect=HTTPError('', 404, '', {}, None)):
-            self.assertIn('ollama pull qwen3:4b', c.responder('hola'))
+            self.assertIn('ollama pull qwen2.5:3b', c.responder('hola'))
         self.assertEqual(c.historial, [])
 
     def test_comandos_no_pasan_al_modelo_y_se_puede_olvidar(self):

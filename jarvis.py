@@ -13,7 +13,11 @@ def normalizar(texto):
 
 
 class Jarvis:
-    def __init__(self, carpeta, conversacion=None):
+    def __init__(self, carpeta, conversacion=None, acciones=False):
+        self.acciones = acciones
+        self.pendiente = None
+        self.peticion_pendiente = ''
+        self.ultima_nota = None
         self.conversacion = conversacion
         self.carpeta = Path(carpeta).expanduser().resolve()
         self.carpeta.mkdir(parents=True, exist_ok=True)
@@ -23,6 +27,20 @@ class Jarvis:
         if orden.startswith('jarvis '):
             texto = texto[7:]
             orden = normalizar(texto)
+        if self.pendiente is not None:
+            if orden in ('cancelar', 'salir', 'terminar', 'adios'):
+                self.pendiente = None
+                if orden == 'cancelar':
+                    return 'Plan cancelado. No ejecuté ninguna acción.', False
+            elif orden == 'confirmar':
+                plan, self.pendiente = self.pendiente, None
+                resultado = self.ejecutar_plan(plan)
+                self.conversacion.recordar(self.peticion_pendiente, resultado)
+                return resultado, False
+            else:
+                return 'Hay un plan pendiente. Di confirmar o cancelar antes de continuar.', False
+        if orden in ('confirmar', 'cancelar'):
+            return 'No hay ningún plan pendiente.', False
         if orden == 'olvida la conversacion':
             if self.conversacion:
                 self.conversacion.historial.clear()
@@ -38,7 +56,7 @@ class Jarvis:
             if sys.platform != 'win32':
                 return 'Abrir aplicaciones requiere Windows.', False
             subprocess.Popen(apps[orden], shell=False)
-            return 'Aplicación abierta.', False
+            return 'Solicitud de apertura enviada a Windows.', False
         if orden.startswith('busca archivo '):
             consulta = orden[len('busca archivo '):].strip()
             if not consulta:
@@ -67,13 +85,64 @@ class Jarvis:
                 try:
                     with ruta.open('x', encoding='utf-8') as archivo:
                         archivo.write(contenido + '\n')
-                    return f'Nota guardada: {ruta.name}.', False
+                    if ruta.read_text(encoding='utf-8') != contenido + '\n':
+                        raise OSError('No se pudo verificar la nota guardada')
+                    self.ultima_nota = ruta
+                    return f'Nota guardada y verificada: {ruta.name}.', False
                 except FileExistsError:
                     continue
             return 'No hay un nombre de nota disponible.', False
         if self.conversacion:
+            if self.acciones:
+                from acciones import validar_plan, describir
+                try:
+                    plan = validar_plan(self.conversacion.planificar(texto))
+                except Exception:
+                    return ('No pude obtener un plan válido de la IA local. No ejecuté acciones. '
+                            'Comprueba Ollama o reformula la petición.'), False
+                if not plan['acciones']:
+                    return plan['respuesta'] or '¿Qué necesitas hacer?', False
+                self.pendiente = plan
+                self.peticion_pendiente = texto
+                pasos = '; '.join(f'{n}. {describir(a)}' for n, a in enumerate(plan['acciones'], 1))
+                return f'Propongo: {pasos}. Di confirmar para ejecutar o cancelar.', False
             return self.conversacion.responder(texto), False
         return 'No reconozco ese comando. Di ayuda para conocer las opciones.', False
+
+
+    def ejecutar_plan(self, plan):
+        from acciones import validar_plan
+        validar_plan(plan)
+        resultados = []
+        self.ultima_nota = None
+        for numero, accion in enumerate(plan['acciones'], 1):
+            try:
+                tipo = accion['tipo']
+                if tipo == 'abrir_nota_creada':
+                    if sys.platform != 'win32':
+                        raise OSError('Abrir notas requiere Windows')
+                    ruta = self.ultima_nota
+                    if ruta is None or ruta.is_symlink() or ruta.resolve().parent != self.carpeta or not ruta.is_file():
+                        raise OSError('La nota creada ya no está disponible')
+                    subprocess.Popen(['notepad.exe', str(ruta)], shell=False)
+                    resultado = 'Solicitud de apertura de la nota enviada a Windows.'
+                else:
+                    comando = {'abrir_aplicacion': lambda: 'abre ' + accion['aplicacion'],
+                               'crear_nota': lambda: 'crea nota ' + accion['contenido'],
+                               'buscar_archivos': lambda: 'busca archivo ' + accion['consulta']}[tipo]()
+                    if tipo == 'abrir_aplicacion' and sys.platform != 'win32':
+                        raise OSError('Abrir aplicaciones requiere Windows')
+                    if tipo == 'crear_nota':
+                        self.ultima_nota = None
+                    resultado, _ = self.ejecutar(comando)
+                    if tipo == 'crear_nota' and self.ultima_nota is None:
+                        raise OSError('No se pudo crear la nota')
+                resultados.append(f'Paso {numero}: {resultado}')
+            except Exception as error:
+                resultados.append(f'Paso {numero} falló: {error}. Detuve los pasos restantes. '
+                                  'Los pasos anteriores no se deshacen automáticamente.')
+                break
+        return ' '.join(resultados) or 'No hay acciones que ejecutar.'
 
 
 def main():
@@ -82,12 +151,15 @@ def main():
     parser.add_argument('--carpeta', default=str(Path.home() / 'Jarvis'), help='Carpeta autorizada para notas y búsquedas')
     parser.add_argument('--modelo', default='modelos/vosk-es', help='Directorio del modelo español Vosk descomprimido')
     parser.add_argument('--ia', action='store_true', help='Conversar con Ollama en esta PC')
-    parser.add_argument('--modelo-ia', default='qwen3:4b', help='Modelo instalado en Ollama')
+    parser.add_argument('--modelo-ia', default='qwen2.5:3b', help='Modelo instalado en Ollama')
     parser.add_argument('--piper', help='Ruta al modelo de voz Piper .onnx (opcional)')
     parser.add_argument('--voz', type=int, help='Número de voz Windows')
     parser.add_argument('--listar-voces', action='store_true', help='Mostrar voces Windows y salir')
     parser.add_argument('--velocidad', type=int, default=165, help='Velocidad de la voz Windows')
+    parser.add_argument('--acciones', action='store_true', help='Proponer planes con herramientas y confirmación (requiere --ia)')
     args = parser.parse_args()
+    if args.acciones and not args.ia:
+        parser.error('--acciones requiere --ia')
     if args.listar_voces:
         import pyttsx3
         motor = pyttsx3.init()
@@ -99,7 +171,7 @@ def main():
     if args.ia:
         from inteligencia import Conversacion
         conversacion = Conversacion(args.modelo_ia)
-    asistente = Jarvis(args.carpeta, conversacion)
+    asistente = Jarvis(args.carpeta, conversacion, args.acciones)
     motor = None
     if not args.texto:
         try:

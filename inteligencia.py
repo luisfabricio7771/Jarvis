@@ -21,7 +21,7 @@ def respuesta_publica(contenido):
 
 
 class Conversacion:
-    def __init__(self, modelo='qwen3:4b'):
+    def __init__(self, modelo='qwen2.5:3b'):
         self.modelo = modelo
         self.historial = []
         # El servicio está en la PC: no enviar conversaciones a un proxy del sistema.
@@ -70,3 +70,45 @@ class Conversacion:
             {'role': 'user', 'content': texto}, {'role': 'assistant', 'content': contenido}
         ])[-12:]
         return contenido
+
+
+    def planificar(self, texto):
+        """Proponer datos, nunca código. Jarvis valida y pide confirmación aparte."""
+        from acciones import validar_plan
+        instrucciones = (
+            'Eres Jarvis. Responde en español y devuelve solo un objeto JSON con las '
+            'claves respuesta (texto) y acciones (lista, máximo 4). Si el usuario solo '
+            'conversa, usa acciones: [] y contesta en respuesta. No inventes acciones '
+            'para preguntas, ejemplos o solicitudes ambiguas: pide aclaración. '
+            'No digas que ejecutaste nada. Herramientas permitidas y campos exactos: '
+            '{"tipo":"abrir_aplicacion","aplicacion":"calculadora"}, '
+            '{"tipo":"abrir_aplicacion","aplicacion":"bloc de notas"}, '
+            '{"tipo":"abrir_aplicacion","aplicacion":"explorador"}, '
+            '{"tipo":"crear_nota","contenido":"texto solicitado"}, '
+            '{"tipo":"buscar_archivos","consulta":"parte del nombre"}, '
+            '{"tipo":"abrir_nota_creada"}. Esta última solo después de crear_nota '
+            'en el mismo plan. No uses rutas, terminal, URLs ni otras herramientas. '
+            'Las búsquedas y notas están limitadas a la carpeta autorizada. '
+            'Si piden borrar, enviar mensajes, compras u otras capacidades, explica '
+            'que no están disponibles y devuelve acciones: []. '
+            'Ejemplo: necesito hacer unas cuentas => '
+            '{"respuesta":"Puedo abrir la calculadora.","acciones":'
+            '[{"tipo":"abrir_aplicacion","aplicacion":"calculadora"}]}.')
+        solicitud = Request('http://127.0.0.1:11434/api/chat', data=json.dumps({
+            'model': self.modelo, 'stream': False, 'format': 'json', 'think': False,
+            'messages': [{'role': 'system', 'content': instrucciones},
+                         *self.historial, {'role': 'user', 'content': texto + (
+                             '\n/no_think' if self.modelo.lower().startswith('qwen3') else '')}],
+            'options': {'temperature': 0, 'num_predict': 1000, 'num_ctx': 4096},
+        }).encode(), headers={'Content-Type': 'application/json'})
+        with self.http.open(solicitud, timeout=180) as respuesta:
+            datos = json.load(respuesta)
+        plan = validar_plan(json.loads(respuesta_publica(datos['message']['content'])))
+        if not plan['acciones']:
+            self.recordar(texto, plan['respuesta'])
+        return plan
+
+    def recordar(self, texto, resultado):
+        self.historial = (self.historial + [
+            {'role': 'user', 'content': texto},
+            {'role': 'assistant', 'content': resultado}])[-12:]
