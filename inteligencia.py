@@ -1,7 +1,23 @@
 """Conversación local mediante la API de Ollama, sin herramientas ejecutables."""
 import json
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, ProxyHandler
+
+
+def respuesta_publica(contenido):
+    """Excluir bloques internos etiquetados antes de mostrarlos o pronunciarlos."""
+    if not isinstance(contenido, str):
+        raise ValueError('respuesta no textual')
+    contenido = re.sub(r'<think\b[^>]*>.*?</think>', '', contenido,
+                       flags=re.DOTALL | re.IGNORECASE)
+    # Un bloque sin cerrar no contiene una respuesta final utilizable.
+    contenido = re.sub(r'<think\b[^>]*>.*$', '', contenido,
+                       flags=re.DOTALL | re.IGNORECASE)
+    # Algunos adaptadores omiten la etiqueta inicial y conservan el cierre.
+    if '</think>' in contenido.lower():
+        contenido = re.split(r'</think>', contenido, flags=re.IGNORECASE)[-1]
+    return contenido.strip()
 
 
 class Conversacion:
@@ -28,7 +44,10 @@ class Conversacion:
             'esta conversación. No afirmes que ejecutaste acciones. Para abrir programas '
             'indica los comandos: abre calculadora, abre bloc de notas, abre explorador. '
             'No inventes resultados ni acceso a archivos.')}]
-        mensajes += self.historial + [{'role': 'user', 'content': texto}]
+        # Qwen3 también admite esta instrucción en versiones cuyo adaptador
+        # no aplica correctamente el campo think de la API.
+        entrada = texto + ('\n/no_think' if self.modelo.lower().startswith('qwen3') else '')
+        mensajes += self.historial + [{'role': 'user', 'content': entrada}]
         solicitud = Request('http://127.0.0.1:11434/api/chat', data=json.dumps({
             'model': self.modelo, 'messages': mensajes, 'stream': False,
             'think': False, 'options': {'num_predict': 320, 'num_ctx': 4096, 'temperature': 0.3},
@@ -36,7 +55,7 @@ class Conversacion:
         try:
             with self.http.open(solicitud, timeout=180) as respuesta:
                 datos = json.load(respuesta)
-            contenido = datos['message']['content'].strip()
+            contenido = respuesta_publica(datos['message']['content'])
             if not contenido:
                 raise ValueError('respuesta vacía')
         except HTTPError as error:

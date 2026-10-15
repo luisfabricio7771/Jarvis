@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError, HTTPError
-from inteligencia import Conversacion
+from inteligencia import Conversacion, respuesta_publica
 from jarvis import Jarvis
 
 
@@ -20,8 +20,20 @@ class ConversacionTest(unittest.TestCase):
             cuerpo = json.loads(solicitud.data)
             self.assertFalse(cuerpo['stream'])
             self.assertFalse(cuerpo['think'])
+            self.assertTrue(cuerpo['messages'][-1]['content'].endswith('/no_think'))
             self.assertEqual(len(c.historial), 12)
             self.assertNotIn('tools', cuerpo)
+
+    def test_razonamiento_no_se_pronuncia(self):
+        self.assertEqual(respuesta_publica('<think>English reasoning</think>Hola, Luis.'), 'Hola, Luis.')
+        self.assertEqual(respuesta_publica('<think>Reasoning sin terminar'), '')
+        self.assertEqual(respuesta_publica('Reasoning</think>Hola.'), 'Hola.')
+        c = Conversacion()
+        with patch.object(c.http, 'open', return_value=io.BytesIO(json.dumps({
+                'message': {'content': '<think>Still thinking', 'thinking': 'Private'}
+        }).encode())):
+            self.assertIn('respuesta inválida', c.responder('hola'))
+        self.assertEqual(c.historial, [])
 
     def test_servidor_ausente_y_modelo_ausente(self):
         c = Conversacion()
